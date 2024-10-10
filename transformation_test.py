@@ -29,7 +29,9 @@ pad = cv.copyMakeBorder(img, PADDING_TB, PADDING_TB,
 
 """ (2) Rotating the image """
 
-THETA = 10
+pad = cv.flip(pad, 1); 
+
+THETA = 5
 
 pad_row, pad_col, pad_colors = pad.shape
 
@@ -44,7 +46,7 @@ rot = cv.warpAffine(pad, matrix, (pad_col, pad_row))
 
 """ (3) Upsample the image """
 
-FACT = 1.6
+FACT = 1.3
 
 # for each 5 degrees, increase fact by 0.3x
 
