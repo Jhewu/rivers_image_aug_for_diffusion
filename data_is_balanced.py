@@ -1,18 +1,14 @@
-# Check if the dataset is balanced
+"""
+Accompanying script for site_id_balancer. 
+It checks if the balanced and augmented 
+image folder is balanced
+"""
 
+# import necessary libraries
 import os
-import shutil
-import random
-import cv2 as cv
-from math import floor
-from math import ceil
 
-def SortDict(dict):
-   # Sort the dictionary by its value in ascending order
-   sorted_items = sorted(dict.items(), key=lambda item: item[1])
-   return sorted_items
-
-def DataBalancer(folder): 
+""" Main Runtime """
+def Data_Is_Balanced(folder): 
     folder_name = f"{folder}"
 
     # obtain image directory
@@ -21,7 +17,7 @@ def DataBalancer(folder):
     image_dir = os.path.join(file_dir, folder_name) 
     dir_list = os.listdir(image_dir)
 
-    print("\n Examining this directory: ", image_dir, "\n")
+    print(f"\n---Examining this directory: {image_dir}---\n")
     
     # declare dictionary to count site_id 
     site_ids = {}
@@ -40,8 +36,7 @@ def DataBalancer(folder):
             site_ids[site_id] = 1
 
     # sort the dictionary, and turn it into a list
-    a_list = SortDict(site_ids)
-
+    a_list = sorted(site_ids.items(), key=lambda item: item[1])
     a_length = len(a_list)
 
     # count how many images in the list
@@ -58,8 +53,4 @@ def DataBalancer(folder):
     print(a_list)
     print(f"\nThere should be: {a_length * a_list[0][1]} number of images\n")
 
-
-if __name__ == "__main__":
-    folder = "balanced_4"
-    DataBalancer(folder)
 
