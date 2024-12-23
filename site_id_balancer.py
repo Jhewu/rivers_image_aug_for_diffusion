@@ -73,7 +73,7 @@ def Pad_img(img):
    return cv.copyMakeBorder(img, padding_tb, padding_tb,
                        padding_lr, padding_lr, borderType = cv.BORDER_CONSTANT, value = (0, 0,0))
 def Flip_img(img):
-   return cv.flip(img, 1);
+   return cv.flip(img, 1)
 
 def Get_center(coord):
    return ceil((coord-1)/2.0)
