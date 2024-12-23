@@ -31,6 +31,7 @@ from math import ceil
 
 # Import script to check if data is balanced
 from data_is_balanced import Data_Is_Balanced
+from add_discarded_data import AddDiscardedData
 
 """HYPERPARAMETERS"""
 THETA = 5                                       # --> degree of rotations (per augmentation)   
@@ -48,7 +49,9 @@ MULTIPLIER = 6                                  # If rotations from degree 5-30 
 TOTAL_MULTIPLIER = (MULTIPLIER*2) + 1           # DO NOT CHANGE THIS VALUE
 
 
-FOLDER_LABELS = ["1", "2", "3", "4", "5", "6"]  # the name of the folder
+FOLDER_LABELS = ["1", "2"]  # the name of the folder
+
+ADD_DISCARDED = True
 
 """------HELPER FUNCTIONS------"""
 def Data_augmentation(img, THETA, FACT, flipped):
@@ -254,6 +257,13 @@ if __name__ == "__main__":
     print(f"\n-----Checking if the dataset is balanced-----\n")
     for label in FOLDER_LABELS:
         Data_Is_Balanced(f"balanced_{label}")
+    print(f"\nYou indicated {ADD_DISCARDED} to add discarded data")
+    if ADD_DISCARDED: 
+        for label in FOLDER_LABELS:
+            AddDiscardedData(label)
+            print(f"\nPlease check your directory for the new folder created with discarded data\nFeel free to merge the two datasets\n")
+        
+    
 
 
 
