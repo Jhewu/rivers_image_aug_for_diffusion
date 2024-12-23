@@ -1,11 +1,24 @@
 """
-This script analyses processed and labeled
-image folder with river images, and then 
-creates a new folder with the data balanced 
-through augmentation. This script must be within 
-the same directoy as the labeled images, and 
-the same directoy as the data_is_balanced.py
-script
+Data Balancer, balances the river image data. It compares the
+site with the minimum amount of images (times a multiplier),
+to the site with the maximum amount of images. If the multiplier,
+does not reach, then the site is ignore. For all of the others that do
+meet, apply the data augmentation required to meet the number of images
+in the max. We are sacrificing some diversity, in order to get the maximum
+amount of data, since diffusion models work well with a lot of data,
+to generalize better.
+
+The default augmentations are rotations every 5 degrees, from 5-30,
+and then do horizontal flip, and then do 5-30 again. Therefore, we have
+a total of 13x multiplier per site ID.
+
+If you want to change the angle of rotations, you can change THETA, but you will 
+need to recalculate the factor for upsampling (how much you will need to zoom into
+the new image to crop out the padding). 
+
+If you want to change the range of rotations, change MULTIPLIER. If you're doing
+5-30 rotations, then it's 6x (from degree 5 to degree 10, there are 6 iterations). 
+DO NOT CHANGE TOTAL_MULTIPLIER as it accounts for the original image and the horizontal flip. 
 """
 
 # Import external libraries
@@ -19,10 +32,27 @@ from math import ceil
 # Import script to check if data is balanced
 from data_is_balanced import Data_Is_Balanced
 
-"""------HELPER FUNCTIONS------"""
+"""HYPERPARAMETERS"""
+THETA = 5                                       # --> degree of rotations (per augmentation)   
+FACT = 1.3                                      # --> multiplication factor to upsample (e.g. zoom into the image)
+                                                # If you're using 5 degrees interval, then it takes 1.3x zoom factor on each 
+                                                # image to crop out the padding resulted from rotation
 
-# MAIN DATA AUGMENTATION FUNCTION
+                                                # If you change THETA, you must change FACT, recommended
+                                                # to keep its default value
+
+
+MULTIPLIER = 6                                  # If rotations from degree 5-30 (there are 6 iterations).
+                                                # this number represnents how many times, we need to iterate
+                                                # to reach the final rotation degree
+TOTAL_MULTIPLIER = (MULTIPLIER*2) + 1           # DO NOT CHANGE THIS VALUE
+
+
+FOLDER_LABELS = ["1", "2", "3", "4", "5", "6"]  # the name of the folder
+
+"""------HELPER FUNCTIONS------"""
 def Data_augmentation(img, THETA, FACT, flipped):
+   """Main Data Augmentation Function"""
    img = cv.imread(img)
    if flipped == False: # if regular rotation
        pad = Pad_img(img)   
@@ -81,24 +111,9 @@ def Get_center(coord):
    return ceil((coord-1)/2.0)
 
 """------Main Runtime------"""
-def DataBalancer(label):
-    """
-    Data Balancer, balances the data by comparing the
-    site with the minimum amount of images (with a multiplier),
-    to the site with the maximum amount of images. If the multiplier,
-    does not reach, then ignore this site. For all of the others that do
-    meet, apply the data augmentation required to meet the number of images
-    in the max. We are sacrificing some diversity, in order to get the maximum
-    amount of data, since diffusion models work well with a lot of data,
-    to generalize better.
-
-    The specific augmentations are rotations every 5 degrees, from 5-60,
-    and then do horizontal flip, and then do 5-60 again. Therefore, we have
-    a total of 23x multiplier per site ID.
-    """
-    LABEL = label
-    folder_name = f"{LABEL}"
-    new_folder_name = f"balanced_{LABEL}"
+def DataBalancer(label, THETA, FACT):
+    folder_name = f"{label}"
+    new_folder_name = f"balanced_{label}"
 
     # obtain image directory
     file_path = os.path.abspath(__file__)
@@ -145,7 +160,7 @@ def DataBalancer(label):
     deleted_counter = 0
     total_deleted = 0
     for item in sorted_list[:]: # when you delete from the same lists, problems, so use [:]
-        min = item[1]*23
+        min = item[1]*MULTIPLIER
         if min >= max:
             break
         else: # min <= max
@@ -200,11 +215,10 @@ def DataBalancer(label):
         image_count_aug = max - site_ids[site]    # --> number of images to augment to reach max
         counter = 1                               # --> counter for number of images currently augmented 
         switch = -1                               # --> (see more down), rotations only or horizontal flipped rotations
+        theta = THETA
+        fact = FACT
 
         switch_ended = 1                          # ---> after the switch is triggered two times, increase THETA and FACT
-        THETA = 5                                 # --> angle of rotations (for augmentation)
-        FACT = 1.3                                # --> factor to upsample
-
         while counter <= image_count_aug:            # --> continue to augment in case rotation or flip rotation is not enough
             #print(f"There are {image_count_aug} images to augment in site {site}, and we are in {counter}")
             for site_img in range(site_ids[site]):
@@ -213,33 +227,32 @@ def DataBalancer(label):
                     #print(f"\nBroke when counter was {counter}, and image_count_aug was {image_count_aug}\n")
                     break
                 elif switch == -1: #  case 1: only rotations
-                    augmented_img = Data_augmentation(site_path[site][site_img], THETA, FACT, False)
+                    augmented_img = Data_augmentation(site_path[site][site_img], theta, fact, False)
                     cv.imwrite(new_destination, augmented_img)
                     counter+=1
                 elif switch == 1:  # case 2: only horizontal flipped rotations
-                    augmented_img = Data_augmentation(site_path[site][site_img], THETA, FACT, True)
+                    augmented_img = Data_augmentation(site_path[site][site_img], theta, fact, True)
                     cv.imwrite(new_destination, augmented_img)
                     counter+=1
             switch = switch*-1
             if switch_ended % 2 == 0:
-                THETA+=5
-                FACT+=0.3 # --> these THETA and FACT values ensure no black padding on final image
+                theta+=5
+                fact+=0.3 # --> these THETA and FACT values ensure no black padding on final image
             switch_ended+=1
         site_number+=1
         #print(f"There are {len(site_path)+1} number of sites, and we are in {site_number}")
 
-    print(f"\n Data balanced is completed for {LABEL}!\n")
+    print(f"\n Data balanced is completed for {label}!\n")
     print(f"\n Original dataset contained {total_files} number of images\n")
     print(f"\n Augmented dataset contains {max * (len(sorted_list)+1)} number of images\n")
 
 if __name__ == "__main__":
-    folder_labels = ["1", "2", "3", "4", "5", "6"]
     print(f"\n-----Balancing/augmenting dataset-----\n")
-    for label in folder_labels: 
+    for label in FOLDER_LABELS: 
         print(f"\nProcessing label {label}\n")
-        DataBalancer(label)
+        DataBalancer(label, THETA, FACT)
     print(f"\n-----Checking if the dataset is balanced-----\n")
-    for label in folder_labels:
+    for label in FOLDER_LABELS:
         Data_Is_Balanced(f"balanced_{label}")
 
 
