@@ -14,4 +14,6 @@ balanced_6/
 .ipynb_checkpoints/
 .virtual_documents/
 flow_300_100/
+flow_600_200/ 
+balanced_data_for_diffusion/
 __pycache__/

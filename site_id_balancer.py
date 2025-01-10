@@ -1,269 +1,258 @@
 """
-Data Balancer, balances the river image data. It compares the
-site with the minimum amount of images (times a multiplier),
-to the site with the maximum amount of images. If the multiplier,
-does not reach, then the site is ignore. For all of the others that do
-meet, apply the data augmentation required to meet the number of images
-in the max. We are sacrificing some diversity, in order to get the maximum
-amount of data, since diffusion models work well with a lot of data,
-to generalize better.
-
-The default augmentations are rotations every 5 degrees, from 5-30,
-and then do horizontal flip, and then do 5-30 again. Therefore, we have
-a total of 13x multiplier per site ID.
-
-If you want to change the angle of rotations, you can change THETA, but you will 
-need to recalculate the factor for upsampling (how much you will need to zoom into
-the new image to crop out the padding). 
-
-If you want to change the range of rotations, change MULTIPLIER. If you're doing
-5-30 rotations, then it's 6x (from degree 5 to degree 10, there are 6 iterations). 
-DO NOT CHANGE TOTAL_MULTIPLIER as it accounts for the original image and the horizontal flip. 
+TO VIEW THIS SCRIPT'S FUNCTION
+SCROLL DOWN TO IF__MAIN__
 """
 
 # Import external libraries
 import os
-import shutil
+import argparse
 import random
 import cv2 as cv
-from math import floor
-from math import ceil
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# Import script to check if data is balanced
-from data_is_balanced import Data_Is_Balanced
-from add_discarded_data import AddDiscardedData
+# Import helper functions
+from utils import *
 
-"""HYPERPARAMETERS"""
-THETA = 5                                       # --> degree of rotations (per augmentation)   
-FACT = 1.3                                      # --> multiplication factor to upsample (e.g. zoom into the image)
-                                                # If you're using 5 degrees interval, then it takes 1.3x zoom factor on each 
-                                                # image to crop out the padding resulted from rotation
-
-                                                # If you change THETA, you must change FACT, recommended
-                                                # to keep its default value
-
-
-MULTIPLIER = 6                                  # If rotations from degree 5-30 (there are 6 iterations).
-                                                # this number represnents how many times, we need to iterate
-                                                # to reach the final rotation degree
-TOTAL_MULTIPLIER = (MULTIPLIER*2) + 1           # DO NOT CHANGE THIS VALUE
-
-
-FOLDER_LABELS = ["1", "2"]  # the name of the folder
-
-ADD_DISCARDED = True
-
-"""------HELPER FUNCTIONS------"""
-def Data_augmentation(img, THETA, FACT, flipped):
-   """Main Data Augmentation Function"""
-   img = cv.imread(img)
-   if flipped == False: # if regular rotation
-       pad = Pad_img(img)   
-       rot = Rotate_img(pad, THETA)
-       up = Upsample_img(rot, FACT)
-       return Center_crop(up, img)
-   else:                # if horizontal flip rotation
-       flip = Flip_img(img)
-       pad = Pad_img(flip)   
-       rot = Rotate_img(pad, THETA)
-       up = Upsample_img(rot, FACT)
-       return Center_crop(up, img)
-
-def Pad_img(img):
-   row, col, colors = img.shape
-   padding_lr = floor(col/2) # left and right
-   padding_tb = floor(row/2) # top and bottom
-   return cv.copyMakeBorder(img, padding_tb, padding_tb,
-                       padding_lr, padding_lr, borderType = cv.BORDER_CONSTANT, value = (0, 0,0))
-def Flip_img(img):
-   return cv.flip(img, 1)
-
-def Get_center(coord):
-   return ceil((coord-1)/2.0)
-
-def Rotate_img(img, THETA):
-   row, col, colors = img.shape
-   centerx = Get_center(col)
-   centery = Get_center(row)
-   matrix = cv.getRotationMatrix2D((centerx, centery), THETA, 1)
-   return cv.warpAffine(img, matrix, (col,row))
-
-def Upsample_img(img, FACT):
-   # for each 5 degrees, increase fact by 0.3x
-   return cv.resize(img, None, fx=FACT, fy=FACT, interpolation = cv.INTER_CUBIC)
-
-def Center_crop(img, og_img):
-   row, col, color = img.shape
-   og_row, og_col, og_color = og_img.shape
-   centerx = Get_center(col)
-   centery = Get_center(row) # --> padded, rotated and upscaled image center
-   ogx = Get_center(og_col)
-   ogy = Get_center(og_row) # ---> image center of original image
-   return img[centery-ogy:centery+ogy, centerx-ogx:centerx+ogx]
-
-def CreateDir(folder_name):
-   if not os.path.exists(folder_name):
-       os.makedirs(folder_name)   
-
-def SortDict(dict):
-   # Sort the dictionary by its value in ascending order
-   sorted_items = sorted(dict.items(), key=lambda item: item[1])
-   return sorted_items
-
-def Get_center(coord):
-   return ceil((coord-1)/2.0)
+"""GLOBAL PARAMETERS"""
+THETA = 5                                    
+FACT = 1.3                                      
+MULTIPLIER = 6                                
+DATASET_DIR = "flow_600_200"
+DEST_DIR = "balanced_data_for_diffusion"
+LABEL = 3
+SEED = 42
 
 """------Main Runtime------"""
-def DataBalancer(label, THETA, FACT):
-    folder_name = f"{label}"
-    new_folder_name = f"balanced_{label}"
+def DataBalancer(input_dir, dest_dir, theta, fact, label, seed, multiplier):
+    # Obtain image directory
+    image_list = os.listdir(input_dir)
 
-    # obtain image directory
-    file_path = os.path.abspath(__file__)
-    file_dir = os.path.dirname(file_path)
-    image_dir = os.path.join(file_dir, folder_name)
-    dir_list = os.listdir(image_dir)
-    
-    # declare dictionary to count site_id
-    # NOTICE THE DIFFERENCE BETWEEN site_ids (dict)
-    # AND site_id (IMAGE NAME)
-    site_ids = {}
+    # Declare dictionary to count site_id
+    site_ids_count = {}
 
-    # declare dictionary to store the full_paths of
+    # Declare dictionary to store the full_paths of
     # each image within a site id
-    site_path = {} # dictionary with a list inside
+    site_path = {}      # dictionary with a list inside
+                        # e.g. [site_id: 23]
 
-    # declare dictionary to store file names, for the
-    # augmented files
-    filename_dict = {}
-
-    # count site_id and append full_file_path
+    # Count site_id and append full_file_path
     total_files = 0
-    for file_name in dir_list:
+    for file_name in image_list:
         total_files += 1
-        full_file_path = os.path.join(image_dir, file_name)
-        image_name = os.path.basename(full_file_path)
-        site_id = image_name.split("_")[0]
-    
-        if site_id in site_ids:
-            site_ids[site_id] += 1
-            site_path[site_id].append(full_file_path)
-            filename_dict[site_id].append(file_name)
-        else:
-            site_ids[site_id] = 1
-            site_path[site_id] = [full_file_path]
-            filename_dict[site_id] = [file_name]
+        
+        # Obtain full file path
+        full_file_path = os.path.join(input_dir, file_name)
 
-    # sort the dictionary, and turn it into a list
-    sorted_list = SortDict(site_ids)
+        # Obtain the site_id
+        site_id = file_name.split("_")[0]
+    
+        if site_id in site_ids_count:
+            # Case 1: if it's already in the list
+            site_ids_count[site_id] += 1
+            site_path[site_id].append(full_file_path)
+        else:
+            # Case 2: if it's not in the list
+            site_ids_count[site_id] = 1
+            site_path[site_id] = [full_file_path]
+
+    # Sort the dictionary, and turn it into a list
+    sorted_list = SortDict(site_ids_count)
     max = sorted_list[-1][1]
 
-    # delete the site_ids with the least number images with the
-    # multiplier (23x) that do not meet the max
-    deleted_counter = 0
-    total_deleted = 0
-    for item in sorted_list[:]: # when you delete from the same lists, problems, so use [:]
-        min = item[1]*MULTIPLIER
-        if min >= max:
-            break
-        else: # min <= max
-            # delete for all dict and lists
-            deleted_counter+=1
-            total_deleted += item[1]
-            del site_path[item[0]]
-            del site_ids[item[0]]
-            del filename_dict[item[0]]
-            sorted_list.remove(item)
-            #print(f"Removed {item}")
+    # Keep track of this number to ensure, the augmentation
+    # is working correctly
+    total_augmented_images = 0
 
-    CreateDir(new_folder_name)
-    destination = os.path.join(file_dir, new_folder_name)
+    # This loop is iterating through each site_id
+    for element in sorted_list: 
+        # Element is shaped like this: ('site_id', 2)
+        # first element is the site_id (a string)
+        # second element is the count
 
-    # Transfer all the images from the max to the
-    # new directory
-    max_site = sorted_list[-1][0]
-    for site_img in range(max):
-        shutil.copy(site_path[max_site][site_img], destination)
+        # Defined the site id
+        site = element[0]
 
-    # delete the site from all dict and list
-    del site_path[max_site]
-    del site_ids[max_site]
-    del filename_dict[max_site]
-    sorted_list.remove(sorted_list[-1])
-
-    # for both the shuffling between the site_path
-    # and filename_dict to be the same
-    seed = 42
-
-    # copy image_count amount of images from each site ids
-    # onto the new folder, and augment the rest to meet the
-    # max amount of images
-    site_number = 0
-    for site in site_path:
-        # copy all the original images
-        for site_img in range(site_ids[site]):
-            shutil.copy(site_path[site][site_img], destination)
-        
-        # randomly shuffle the list contents
+        # Randomly shuffle the list contents
         # so that the balancing is not deterministic
         random.seed(seed)
         random.shuffle(site_path[site])
-        random.shuffle(filename_dict[site])
 
-        # already used all of the original images
-        # ... now augment the original images,
+        # Now augment the original images,
         # to reach the max. The code is applying
         # the minimum degree of rotation to each
         # image in order to reach the image count
-        image_count_aug = max - site_ids[site]    # --> number of images to augment to reach max
-        counter = 1                               # --> counter for number of images currently augmented 
-        switch = -1                               # --> (see more down), rotations only or horizontal flipped rotations
-        theta = THETA
-        fact = FACT
+        images_to_augment = max - site_ids_count[site]          # --> number of images to augment to reach max
+        maximum_augmentation = site_ids_count[site]*(multiplier*2)
+        counter = 1                                             # --> counter for number of images currently augmentated
+        switch = -1                                             # --> (see more down), rotations only or horizontal flipped rotations
+        theta_local = theta
+        fact_local = fact
 
-        switch_ended = 1                          # ---> after the switch is triggered two times, increase THETA and FACT
-        while counter <= image_count_aug:            # --> continue to augment in case rotation or flip rotation is not enough
-            #print(f"There are {image_count_aug} images to augment in site {site}, and we are in {counter}")
-            for site_img in range(site_ids[site]):
-                new_destination = os.path.join(destination, f"{filename_dict[site][site_img]}_augmented_{counter}.JPG")
-                if counter > image_count_aug:       # --> if we reached enough images within the loop
-                    #print(f"\nBroke when counter was {counter}, and image_count_aug was {image_count_aug}\n")
+        # After the switch is triggered two times, 
+        # increase THETA and FACT            
+        switch_ended = 1    
+        while counter <= maximum_augmentation and counter <= images_to_augment: # --> continue to augment in case rotation or flip rotation is not enough
+            # print(f"There are {images_to_augment} images to augment in site {site}, and we are in {counter}")
+
+            # This loop is iterating each image path
+            for i in range(len(site_path[site])):
+                # Get image path
+                image_path = site_path[site][i]
+
+                # Obtain the image name
+                basename = os.path.basename(image_path)
+                image_name = basename.split(".JPG")[0].split(".jpg")[0]
+                new_destination = os.path.join(dest_dir, f"{image_name}_{theta_local}_{switch}.JPG")
+
+                if counter > maximum_augmentation or counter > images_to_augment:       # --> if we reached enough images within the loop
+                    # The first condition counter > maximum_augmentation is optional
+                    # because if the images that do not meet the max, it will be even
+                    # and it will break in the other catch if statement, however, it's good
+                    # to keep it for now
+
+                    # print(f"\nBroke when counter was {counter}, and image_to_augment was {images_to_augment}\n")
+                    # print(f"Reached the maximum amount of augmentation at count {counter}")
                     break
-                elif switch == -1: #  case 1: only rotations
-                    augmented_img = Data_augmentation(site_path[site][site_img], theta, fact, False)
+                elif switch == -1: #  Case 1: only rotations
+                    augmented_img = Data_augmentation(image_path, theta_local, fact_local, False)
                     cv.imwrite(new_destination, augmented_img)
                     counter+=1
-                elif switch == 1:  # case 2: only horizontal flipped rotations
-                    augmented_img = Data_augmentation(site_path[site][site_img], theta, fact, True)
+                elif switch == 1:  # Case 2: only horizontal flipped rotations
+                    augmented_img = Data_augmentation(image_path, theta_local, fact_local, True)
                     cv.imwrite(new_destination, augmented_img)
                     counter+=1
+            # Update tracking values
             switch = switch*-1
             if switch_ended % 2 == 0:
-                theta+=5
-                fact+=0.3 # --> these THETA and FACT values ensure no black padding on final image
+                theta_local+=theta
+                fact_local+=(fact-1)  # --> these THETA and FACT values ensure no black padding on final image
             switch_ended+=1
-        site_number+=1
-        #print(f"There are {len(site_path)+1} number of sites, and we are in {site_number}")
+            # Check again before continuing the while loop
+            if counter > maximum_augmentation or counter > images_to_augment:
+                total_augmented_images+=(counter-1)
+                # print(f"Reached the maximum amount of augmentation at count {counter}")
+                break  # This will break the while loop as well
 
-    print(f"\n Data balanced is completed for {label}!\n")
+    print(f"\n SiteIDBalancer() is completed for label {label}!\n")
     print(f"\n Original dataset contained {total_files} number of images\n")
-    print(f"\n Augmented dataset contains {max * (len(sorted_list)+1)} number of images\n")
+    print(f"\n Augmented dataset should contain {total_files + total_augmented_images} number of images\n")
+
+def SiteIDBalancer(): 
+    # Obtain image directory
+    root_dir = os.getcwd()
+    dataset_dir = os.path.join(root_dir, DATASET_DIR)
+    dest_dir = os.path.join(root_dir, DEST_DIR)
+
+    # Create the list with the path of each label
+    all_label_dirs = [os.path.join(dataset_dir, str(i)) for i in range(1, LABEL+1)]
+
+    # Create the list with the path of destination directories
+    dest_label_dirs = [os.path.join(dest_dir, str(i)) for i in range(1, LABEL+1)]
+
+    # Copy all the original files to the destination directory
+    print(f"\nCopying original files to {dest_dir}...")
+    max_workers = 10
+    with ThreadPoolExecutor(max_workers=max_workers) as executor: 
+        executor.map(Copy_dir, all_label_dirs, dest_label_dirs)
+
+    # Perform the data augmentation in parallel
+    max_workers = 6
+    print(f"\nBalancing and augmenting dataset. Give us 5 minutes, please be patient...")
+    with ThreadPoolExecutor(max_workers=max_workers) as executor: 
+        futures = []
+        for i in range(len(all_label_dirs)):
+            future = executor.submit(DataBalancer, all_label_dirs[i], 
+                            dest_label_dirs[i], 
+                            theta=THETA, 
+                            fact=FACT, 
+                            label=i+1, 
+                            seed=SEED, 
+                            multiplier=MULTIPLIER)
+            futures.append(future)
+    for future in as_completed(futures):
+        try:
+            result = future.result()  # This will raise any exceptions caught in the thread
+            print("\nParallel data augmentation task completed successfully.")
+        except Exception as e:
+            print(f"\nError in data augmentation: {e}")
 
 if __name__ == "__main__":
-    print(f"\n-----Balancing/augmenting dataset-----\n")
-    for label in FOLDER_LABELS: 
-        print(f"\nProcessing label {label}\n")
-        DataBalancer(label, THETA, FACT)
-    print(f"\n-----Checking if the dataset is balanced-----\n")
-    for label in FOLDER_LABELS:
-        Data_Is_Balanced(f"balanced_{label}")
-    print(f"\nYou indicated {ADD_DISCARDED} to add discarded data")
-    if ADD_DISCARDED: 
-        for label in FOLDER_LABELS:
-            AddDiscardedData(label)
-            print(f"\nPlease check your directory for the new folder created with discarded data\nFeel free to merge the two datasets\n")
-        
-    
+    des="""
+    ------------------------------------------
+    - Site ID Balancer/Augmentation (for Diffusion Models) (Overview) -
+
+    Balances and perform the necessary image augmentation
+    (e.g. 5-degree rotations + horizontal flip) to river
+    stream images from CT DEEP, to prepare the dataset for
+    diffusion model training (one model per label). Since
+    the dataset is unbalanced, training it directly (without augmentation), 
+    will cause the Diffusion Model to generate more images from certain 
+    site ids. We will compensate that by augmenting the dataset. 
+    ------------------------------------------
+    - The Augmentation Process -
+
+    The default augmentations are rotations every 5 degrees (from 5-30) 
+    with horizontal flip before moving to the next degree rotation. The 
+    script will augment all site_id to reach the site_id with the maximum
+    amount of images. If there's not enough images to reach the maximum 
+    amount of images, it will simply stop after it runs out of augmentation. 
+    This ensures the site_ids with less images are represented in the distribution.
+    ------------------------------------------
+    - How to Use -
+
+    > in_dir: (required) directory containing the labeled folders (e.g. 1,2...6)
+    > out_dir (optional): the output directory
+    > labels (default = 3): the labels you want to balance/augment in the in_dir starting from 0. 
+      If 3, labels are 1-3. If 6, labels are 1-6
+    > theta (default=5): the angle of rotation. If you change theta, you must
+      change fact as well. If you're using 5 degrees interval, then it takes 1.3x zoom factor on each 
+      image to crop out the padding resulted from the rotation.
+    > fact (default=1.3): the zoom factor, after rotation.
+    > multiplier (default=6): how many times to rotate. So if it's 6, it will rotate 
+      from 5-30 degrees with horizontal flip in between, with a final 13x multiplier
+      per image
+    ------------------------------------------
+    """
+    # Initialize the Parser
+    parser = argparse.ArgumentParser(description=des.lstrip(" "),formatter_class=argparse.RawTextHelpFormatter)
+
+    # Add the arguments
+    parser.add_argument('--in_dir',type=str,help='input directory of images with labeled subfolders\t[None]')
+    parser.add_argument('--out_dir',type=str,help='output directory prefix\t[None]')
+    parser.add_argument('--labels',type=str, help='the labels you want to balance/augment in the in_dir starting from 0. If 3, labels are 1-3\t[3]')
+    parser.add_argument('--theta',type=int,help='the angle of rotation\t[5]')
+    parser.add_argument('--fact', type=int, help='the zoom factor, after rotation\t[1.3]')
+    parser.add_argument('--multiplier',type=int,help='how many times to rotate\t[6]')
+    args = parser.parse_args()
+
+    if args.in_dir is not None:
+        DATASET_NAME = args.in_dir
+    else: raise IOError
+    if args.out_dir is not None:
+        DEST_DIR = os.path.join(args.out_dir, "balanced_data")
+    else: DEST_DIR
+    if args.labels is not None:
+        LABEL = args.labels
+    else: LABEL = 3
+    if args.theta is not None:
+        THETA = args.theta
+    else: THESE = 5
+    if args.fact is not None:
+        FACT = args.fact
+    else: FACT = 1.3
+    if args.multiplier is not None:
+        MULTIPLIER = args.multiplier
+    else: MULTIPLIER = 6
+
+    params = {'in_dir':DATASET_NAME,'out_dir':DEST_DIR,
+              'labels': LABEL, 'theta':THETA,'fact':FACT,
+              'multiplier':MULTIPLIER}
+    print('using params:%s'%params)
+
+    # Call the function
+    SiteIDBalancer()
+    print(f"\nFinish balancing/augmentating the dataset\nCheck your directory for '{DEST_DIR}'")
+
 
 
 
