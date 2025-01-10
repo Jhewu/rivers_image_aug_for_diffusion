@@ -1,4 +1,4 @@
-# Site ID Balancer/Augmentation (for Diffusion Models)
+# CT DEEP Site ID Balancer/Augmentation (for Diffusion Models)
 
 This repository contains a tool that balances and performs the necessary image augmentations (e.g., 5-degree rotations + horizontal flips) on river stream images from CT DEEP, to prepare the dataset for diffusion model training. Since the dataset is unbalanced, training it directly (without augmentation) may cause the diffusion model to generate more images from certain site IDs. To compensate for this, we augment the dataset, ensuring a balanced distribution for training.
 
