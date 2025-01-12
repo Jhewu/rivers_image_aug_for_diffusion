@@ -18,7 +18,7 @@ THETA = 5
 FACT = 1.3                                      
 MULTIPLIER = 6                                
 DATASET_DIR = "flow_600_200"
-DEST_DIR = "balanced_data_for_diffusion"
+DEST_DIR = "diffusion_data"
 LABEL = 3
 SEED = 42
 
@@ -147,7 +147,7 @@ def SiteIDBalancer():
     all_label_dirs = [os.path.join(dataset_dir, str(i)) for i in range(1, LABEL+1)]
 
     # Create the list with the path of destination directories
-    dest_label_dirs = [os.path.join(dest_dir, f"flow_{i}") for i in range(1, LABEL+1)]
+    dest_label_dirs = [os.path.join(dest_dir, f"L{i}") for i in range(1, LABEL+1)]
 
     # Copy all the original files to the destination directory
     print(f"\nCopying original files to {dest_dir}...")
@@ -242,7 +242,7 @@ if __name__ == "__main__":
         DATASET_NAME = args.in_dir
     else: raise IOError
     if args.out_dir is not None:
-        DEST_DIR = os.path.join(args.out_dir, "balanced_data")
+        DEST_DIR = os.path.join(args.out_dir, DEST_DIR)
     else: DEST_DIR
     if args.labels is not None:
         LABEL = args.labels
