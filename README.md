@@ -15,7 +15,7 @@ The script augments all images from each `site_id` folder until the number of im
 The script takes several input arguments:
 
 - **in_dir**: (required) The directory containing labeled folders (e.g., `1`, `2`, ... `6`).
-- **out_dir** (optional): The directory where augmented images will be saved. If not provided, the augmented images will be saved in the `in_dir`.
+- **out_dir** (optional): The directory where augmented images will be saved. If not provided, the augmented images will be saved in the current working directory. The dest directory will be structured like this and it's normal: "balanced_data_for_diffusion/flow_1/1" and so on. This is done so to make it easier to fetch when training it on the diffusion model.
 - **labels** (default = 3): The number of labels (site IDs) to balance and augment. For example:
   - If `labels=3`, the script will augment labels `1`, `2`, and `3`.
   - If `labels=6`, the script will augment labels `1` through `6`.

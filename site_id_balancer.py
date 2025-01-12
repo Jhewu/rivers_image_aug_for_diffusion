@@ -147,13 +147,25 @@ def SiteIDBalancer():
     all_label_dirs = [os.path.join(dataset_dir, str(i)) for i in range(1, LABEL+1)]
 
     # Create the list with the path of destination directories
-    dest_label_dirs = [os.path.join(dest_dir, str(i)) for i in range(1, LABEL+1)]
+    dest_label_dirs = [os.path.join(dest_dir, f"flow_{i}") for i in range(1, LABEL+1)]
 
     # Copy all the original files to the destination directory
     print(f"\nCopying original files to {dest_dir}...")
-    max_workers = 10
+    max_workers = 6
     with ThreadPoolExecutor(max_workers=max_workers) as executor: 
-        executor.map(Copy_dir, all_label_dirs, dest_label_dirs)
+        futures = []
+        for i in range(LABEL): 
+            path_to_copy = os.path.join(dest_label_dirs[i], str(i+1))
+            future = executor.submit(Copy_dir, all_label_dirs[i], path_to_copy)
+            futures.append(future)
+
+        # Wait for all tasks to complete
+        for future in as_completed(futures): 
+            try: 
+                result = future.result()
+                print(f"Copy task completed successfully")
+            except Exception as e: 
+                print(f"\nError in directory copy: {e}")
 
     # Perform the data augmentation in parallel
     max_workers = 6
@@ -161,8 +173,9 @@ def SiteIDBalancer():
     with ThreadPoolExecutor(max_workers=max_workers) as executor: 
         futures = []
         for i in range(len(all_label_dirs)):
+            path_to_augment = os.path.join(dest_label_dirs[i], str(i+1))
             future = executor.submit(DataBalancer, all_label_dirs[i], 
-                            dest_label_dirs[i], 
+                            path_to_augment, 
                             theta=THETA, 
                             fact=FACT, 
                             label=i+1, 
